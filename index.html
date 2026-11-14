@@ -211,8 +211,9 @@ $('introSwan').innerHTML = swanSVG(300).replace('width="300"', 'width="100%"').r
 
 /* ---------- Наложение: картинка и ручная подстройка ---------- */
 const overlay = { el: null, w: 1, h: 1 };       // готовый источник для drawImage
-const adj = { x: 0, y: 0, s: 1, r: 0 };         // смещение (в долях ширины глаз), масштаб, поворот
-const resetAdj = () => { adj.x = 0; adj.y = 0; adj.s = 1; adj.r = 0; };
+const DEF_ADJ = { x: 0, y: 2, s: 1, r: 0 };     // y: сдвиг вниз в долях расстояния между глазами
+const adj = { ...DEF_ADJ };                      // смещение, масштаб, поворот
+const resetAdj = () => Object.assign(adj, DEF_ADJ);
 
 // Уменьшаем большие картинки один раз, чтобы не тормозить отрисовку каждый кадр
 function setOverlayFromImage(img) {
@@ -270,6 +271,9 @@ makeFilters();
 let pose = null;     // {x, y, span, roll} в пикселях кадра
 let alpha = 0;       // текущая непрозрачность наложения (плавное появление/исчезновение)
 let lastSeen = -1e9, lastVideoTime = -1, lastNow = 0;
+let lastDetect = 0, detectErrors = 0, hintOn = false;
+// Телефон определяем по user agent (iPad с iPadOS тоже считается)
+const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform));
 
 function updatePose(lm, W, H, tSec) {
   const p = {};
@@ -327,18 +331,27 @@ function frame(now) {
   const dt = Math.min(0.1, (now - lastNow) / 1000); lastNow = now;
 
   // Детекция лица на новом кадре видео
-  if (landmarker && cam.currentTime !== lastVideoTime) {
-    lastVideoTime = cam.currentTime;
+  // Детекция ~30 раз в секунду по таймеру: на iOS cam.currentTime у камеры может не меняться
+  if (landmarker && now - lastDetect >= 33) {
+    lastDetect = now;
     try {
       const res = landmarker.detectForVideo(cam, now);
+      detectErrors = 0;
       if (res.faceLandmarks && res.faceLandmarks.length) {
         if (now - lastSeen > 400) makeFilters();   // после потери лица фильтры начинаем заново
         lastSeen = now;
         updatePose(res.faceLandmarks[0], W, H, now / 1000);
       }
-    } catch (e) { /* пропускаем кадр */ }
+    } catch (e) {
+      if (++detectErrors === 60) say('Ошибка распознавания: ' + (e.message || e.name));
+    }
   }
   const visible = now - lastSeen < 250;
+  // Подсказка, если лицо не в кадре
+  if (landmarker) {
+    const hint = !visible && now - lastSeen > 1500;
+    if (hint !== hintOn) { hintOn = hint; say(hint ? 'Лицо не найдено' : ''); }
+  }
   alpha += ((visible ? 1 : 0) - alpha) * (1 - Math.exp(-dt * 8)); // плавно показываем/скрываем
 
   ctx.save();
@@ -423,7 +436,9 @@ async function loadModel() {
     baseOptions: { modelAssetPath: MP_MODEL, delegate },
     runningMode: 'VIDEO', numFaces: 1,
   });
-  try { landmarker = await make('GPU'); } catch (_) { landmarker = await make('CPU'); }
+  // На телефонах GPU-делегат часто не отдаёт лицо, поэтому там сразу CPU
+  if (isMobile) landmarker = await make('CPU');
+  else { try { landmarker = await make('GPU'); } catch (_) { landmarker = await make('CPU'); } }
   say('');
 }
 
@@ -439,10 +454,17 @@ $('startBtn').onclick = async () => {
     await startCamera();
     state.started = true;
     $('intro').classList.remove('show');
-    await loadModel();
   } catch (e) {
     $('startBtn').disabled = false;
-    say('Ошибка: ' + (e.message || e.name), 5000);
+    say('Камера: ' + (e.message || e.name), 6000);
+    return;
+  }
+  try {
+    await loadModel();
+  } catch (e) {
+    // Ошибку модели не прячем сами, закрывается тапом
+    say('Модель не загрузилась: ' + (e.message || e.name || e) + ' (тап — закрыть)');
+    $('status').onclick = () => say('');
   }
 };
 $('helpBtn').onclick = () => { $('startBtn').style.display = 'none'; $('intro').classList.add('show'); };
