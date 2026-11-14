@@ -1,5 +1,5 @@
 // Service worker: после первой загрузки приложение (и MediaPipe с CDN) работает без сети.
-const CACHE = 'swan-cam-v1';   // при изменении index.html можно поднять версию
+const CACHE = 'swan-cam-v2';   // при изменении index.html можно поднять версию
 
 self.addEventListener('install', e => {
   e.waitUntil(
