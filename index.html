@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#2b2d31">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Лебедь">
+<title>Лебедь-камера</title>
+<style>
+  :root {
+    --graphite: #2b2d31;
+    --ink: #1b1c1f;
+    --snow: #f7f5f3;
+    --rose: #d9a5b3;
+    --blue: #9fb8cc;
+    --glass: rgba(255,255,255,.14);
+    --line: rgba(255,255,255,.38);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; background: var(--ink); color: var(--snow);
+    font: 15px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden; overscroll-behavior: none;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  }
+  /* Холст на весь экран; object-fit: cover обрезает по краям, как штатная камера */
+  #view {
+    position: fixed; inset: 0; width: 100%; height: 100dvh;
+    object-fit: cover; touch-action: none; background: var(--ink);
+  }
+  /* Видео-элемент скрыт, но остаётся в DOM (нужно iOS) */
+  #cam { position: fixed; left: 0; top: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+
+  .bar { position: fixed; left: 0; right: 0; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 0 14px; pointer-events: none; }
+  .bar > * { pointer-events: auto; }
+  #top { top: 0; padding-top: calc(env(safe-area-inset-top) + 10px); justify-content: space-between; }
+  #bottom { bottom: 0; flex-direction: column; gap: 14px; padding-bottom: calc(env(safe-area-inset-bottom) + 18px); }
+  .row { display: flex; align-items: center; justify-content: space-between; width: 100%; max-width: 420px; }
+
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .pill, .ico {
+    background: var(--glass); border: 1px solid var(--line);
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  }
+  .pill { border-radius: 999px; padding: 8px 14px; font-size: 13px; letter-spacing: .02em; }
+  .ico { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; padding: 0; }
+  .ico svg { width: 24px; height: 24px; stroke: var(--snow); fill: none; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+  .pill.on { background: rgba(217,165,179,.35); border-color: var(--rose); }
+
+  .modes { display: flex; gap: 4px; padding: 4px; border-radius: 999px; background: var(--glass); border: 1px solid var(--line); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+  .modes button { background: transparent; border: 0; padding: 6px 16px; border-radius: 999px; font-size: 13px; opacity: .7; }
+  .modes button.act { background: var(--snow); color: var(--graphite); opacity: 1; }
+
+  #shutter { width: 80px; height: 80px; border-radius: 50%; border: 3px solid #fff; background: transparent; padding: 0; position: relative; }
+  #shutter::after { content: ""; position: absolute; inset: 6px; border-radius: 50%; background: #fff; transition: all .2s; }
+  body.video #shutter::after { background: var(--rose); }
+  body.rec #shutter::after { inset: 22px; border-radius: 10px; background: var(--rose); }
+
+  #timer { position: fixed; top: calc(env(safe-area-inset-top) + 66px); left: 50%; transform: translateX(-50%); display: none; align-items: center; gap: 8px; }
+  body.rec #timer { display: flex; }
+  #timer i { width: 9px; height: 9px; border-radius: 50%; background: var(--rose); animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+
+  #status { position: fixed; left: 50%; top: 42%; transform: translateX(-50%); text-align: center; padding: 10px 16px; border-radius: 14px; background: rgba(27,28,31,.7); font-size: 14px; display: none; max-width: 80vw; }
+
+  #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .25s; }
+  #flash.go { opacity: .8; transition: none; }
+
+  /* Экран инструкции / старта и экран просмотра */
+  .sheet { position: fixed; inset: 0; background: linear-gradient(160deg, #34363c, #1b1c1f); display: none; flex-direction: column; align-items: center; overflow-y: auto; padding: calc(env(safe-area-inset-top) + 28px) 22px calc(env(safe-area-inset-bottom) + 28px); }
+  .sheet.show { display: flex; }
+  .sheet h1 { font-weight: 300; font-size: 26px; letter-spacing: .06em; margin: 10px 0 4px; }
+  .sheet p { color: #c8c6c4; margin: 4px 0 14px; text-align: center; }
+  .sheet .main { background: var(--snow); color: var(--graphite); border: 0; border-radius: 999px; padding: 14px 40px; font-size: 16px; margin: 8px 0 22px; }
+  .how { max-width: 420px; width: 100%; font-size: 14px; color: #d6d4d2; }
+  .how h3 { font-weight: 400; color: var(--rose); margin: 16px 0 6px; font-size: 14px; letter-spacing: .04em; }
+  .how ol { margin: 0; padding-left: 20px; }
+  .how li { margin: 3px 0; }
+  #introSwan { width: 150px; }
+
+  #review { background: #000; padding: 0; }
+  #review .media { flex: 1; width: 100%; min-height: 0; display: grid; place-items: center; }
+  #review .media img, #review .media video { max-width: 100%; max-height: 100%; }
+  #review .acts { display: flex; gap: 14px; padding: 16px; padding-bottom: calc(env(safe-area-inset-bottom) + 16px); }
+  #review .acts button { border-radius: 999px; padding: 13px 30px; font-size: 16px; border: 1px solid var(--line); background: var(--glass); }
+  #review .acts .ok { background: var(--snow); color: var(--graphite); border: 0; }
+</style>
+</head>
+<body>
+
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="view"></canvas>
+
+<div id="flash"></div>
+<div id="status"></div>
+<div id="timer" class="pill"><i></i><span id="timerText">00:00</span></div>
+
+<div id="top" class="bar">
+  <button id="mirrorBtn" class="pill">Зеркало в файле: выкл</button>
+  <div style="display:flex;gap:8px">
+    <button id="resetBtn" class="pill">Сбросить</button>
+    <button id="helpBtn" class="pill" aria-label="Справка">?</button>
+  </div>
+</div>
+
+<div id="bottom" class="bar">
+  <div class="modes">
+    <button id="modePhoto" class="act">Фото</button>
+    <button id="modeVideo">Видео</button>
+  </div>
+  <div class="row">
+    <button id="uploadBtn" class="ico" aria-label="Загрузить картинку">
+      <svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-4.5 4 3.5 3-2.5 4 3.5"/></svg>
+    </button>
+    <button id="shutter" aria-label="Затвор"></button>
+    <button id="flipBtn" class="ico" aria-label="Сменить камеру">
+      <svg viewBox="0 0 24 24"><path d="M4 11a8 8 0 0 1 14-4.5L20 9"/><path d="M20 4v5h-5"/><path d="M20 13a8 8 0 0 1-14 4.5L4 15"/><path d="M4 20v-5h5"/></svg>
+    </button>
+  </div>
+</div>
+
+<input id="file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+
+<!-- Стартовый экран и инструкция -->
+<div id="intro" class="sheet show">
+  <div id="introSwan"></div>
+  <h1>Лебедь-камера</h1>
+  <p>Картинка на голове. Всё остаётся на устройстве.</p>
+  <button id="startBtn" class="main">Включить камеру</button>
+  <div class="how">
+    <h3>КАК ДОБАВИТЬ НА ГЛАВНЫЙ ЭКРАН</h3>
+    <b>iPhone (только Safari)</b>
+    <ol>
+      <li>Откройте страницу в Safari по HTTPS-ссылке.</li>
+      <li>Нажмите «Поделиться» (квадрат со стрелкой).</li>
+      <li>Выберите «На экран “Домой”» и подтвердите.</li>
+    </ol>
+    <br><b>Android (Chrome)</b>
+    <ol>
+      <li>Откройте страницу в Chrome.</li>
+      <li>Меню ⋮ → «Установить приложение» или «Добавить на главный экран».</li>
+      <li>Подтвердите установку.</li>
+    </ol>
+    <h3>ЖЕСТЫ</h3>
+    Один палец — перемещение, два пальца — размер и поворот, «Сбросить» — вернуть как было.
+  </div>
+</div>
+
+<!-- Просмотр результата -->
+<div id="review" class="sheet">
+  <div class="media" id="reviewMedia"></div>
+  <div class="acts">
+    <button id="cancelBtn">Отмена</button>
+    <button id="saveBtn" class="ok">Сохранить</button>
+  </div>
+</div>
+
+<script>
+'use strict';
+/* ============================================================
+   Лебедь-камера: MediaPipe Face Landmarker + canvas + запись
+   ============================================================ */
+
+const $ = id => document.getElementById(id);
+const cam = $('cam'), view = $('view'), ctx = view.getContext('2d');
+
+// Версия MediaPipe и ресурсы модели
+const MP_VER = '0.10.14';
+const MP_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/+esm`;
+const MP_WASM = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/wasm`;
+const MP_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+
+// Общее состояние
+const state = {
+  facing: 'user',      // 'user' — фронтальная, 'environment' — задняя
+  mode: 'photo',       // 'photo' | 'video'
+  fileMirror: false,   // зеркалить ли сохранённый файл (только для фронтальной)
+  started: false,
+  recording: false,
+};
+let stream = null, micStream = null, landmarker = null;
+
+/* ---------- SVG-лебедь (рисуется кодом, без внешних файлов) ---------- */
+function swanInner(ink, a, b, c) {
+  return `
+  <defs>
+    <linearGradient id="gb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient>
+    <linearGradient id="gn" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${c}"/></linearGradient>
+  </defs>
+  <path d="M46 190 C40 160 92 146 148 152 C186 157 206 172 208 190 C160 206 84 210 46 190 Z" fill="url(#gb)" stroke="${ink}" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M80 166 C50 140 58 96 92 82 C120 70 128 50 112 38" fill="none" stroke="${ink}" stroke-width="17" stroke-linecap="round"/>
+  <path d="M80 166 C50 140 58 96 92 82 C120 70 128 50 112 38" fill="none" stroke="url(#gn)" stroke-width="14.5" stroke-linecap="round"/>
+  <path d="M104 33 L84 41 L105 45 Z" fill="${b}" stroke="${ink}" stroke-width="1.2" stroke-linejoin="round"/>
+  <circle cx="112" cy="35" r="1.6" fill="${ink}"/>
+  <path d="M96 172 C128 156 170 160 196 182" fill="none" stroke="${ink}" stroke-width="1.2" stroke-linecap="round"/>
+  <path d="M112 180 C138 168 168 172 186 186" fill="none" stroke="${ink}" stroke-width="1" stroke-linecap="round" opacity=".7"/>
+  <path d="M60 204 C100 214 160 214 200 204" fill="none" stroke="${ink}" stroke-width="1" opacity=".4"/>`;
+}
+// Картинка по умолчанию: графитовый контур, мягкие белый/розовый/голубой градиенты
+const swanSVG = (w = 760) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="30 14 190 204" width="${w}" height="${Math.round(w * 204 / 190)}">${swanInner('#3a3c42', '#ffffff', '#ecc9d3', '#cddbe8')}</svg>`;
+// Иконка приложения: тёмный фон, лебедь по центру (с запасом под maskable)
+const iconSVG = () =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" fill="#2b2d31"/><g transform="translate(47.5 62.6) scale(1.67)">${swanInner('#7d8390', '#ffffff', '#e8c5cf', '#c9d6e2')}</g></svg>`;
+const svgToUrl = s => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(s);
+
+$('introSwan').innerHTML = swanSVG(300).replace('width="300"', 'width="100%"').replace(/height="\d+"/, '');
+
+/* ---------- Наложение: картинка и ручная подстройка ---------- */
+const overlay = { el: null, w: 1, h: 1 };       // готовый источник для drawImage
+const adj = { x: 0, y: 0, s: 1, r: 0 };         // смещение (в долях ширины глаз), масштаб, поворот
+const resetAdj = () => { adj.x = 0; adj.y = 0; adj.s = 1; adj.r = 0; };
+
+// Уменьшаем большие картинки один раз, чтобы не тормозить отрисовку каждый кадр
+function setOverlayFromImage(img) {
+  const k = Math.min(1, 1024 / Math.max(img.naturalWidth, img.naturalHeight));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(img.naturalWidth * k));
+  c.height = Math.max(1, Math.round(img.naturalHeight * k));
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); // прозрачность PNG сохраняется
+  overlay.el = c; overlay.w = c.width; overlay.h = c.height;
+}
+{
+  const im = new Image();
+  im.onload = () => setOverlayFromImage(im);
+  im.src = svgToUrl(swanSVG());
+}
+
+$('uploadBtn').onclick = () => $('file').click();
+$('file').onchange = e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  const url = URL.createObjectURL(f), im = new Image();
+  im.onload = () => { setOverlayFromImage(im); URL.revokeObjectURL(url); resetAdj(); };
+  im.onerror = () => { URL.revokeObjectURL(url); say('Не удалось открыть картинку', 2500); };
+  im.src = url;
+};
+$('resetBtn').onclick = resetAdj;
+
+/* ---------- One Euro Filter (сглаживание лэндмарков) ---------- */
+class LowPass {
+  constructor() { this.y = null; }
+  f(x, a) { this.y = this.y === null ? x : a * x + (1 - a) * this.y; return this.y; }
+}
+class OneEuro {
+  constructor(minCutoff = 1.5, beta = 25, dCutoff = 1) {
+    this.minCutoff = minCutoff; this.beta = beta; this.dCutoff = dCutoff;
+    this.x = new LowPass(); this.dx = new LowPass(); this.last = null;
+  }
+  alpha(cutoff, dt) { const tau = 1 / (2 * Math.PI * cutoff); return 1 / (1 + tau / dt); }
+  filter(v, t) {
+    if (this.last === null) { this.last = t; this.dx.y = 0; return this.x.f(v, 1); }
+    const dt = Math.max(t - this.last, 1e-3); this.last = t;
+    const dv = (v - this.x.y) / dt;
+    const edx = this.dx.f(dv, this.alpha(this.dCutoff, dt));
+    const cutoff = this.minCutoff + this.beta * Math.abs(edx);
+    return this.x.f(v, this.alpha(cutoff, dt));
+  }
+}
+// Нужные точки: 10 — макушка лба, 151 — середина лба, 9 — между бровей, 33 и 263 — внешние углы глаз
+const IDS = [10, 151, 9, 33, 263];
+let filters = null;
+const makeFilters = () => { filters = {}; for (const id of IDS) filters[id] = { x: new OneEuro(), y: new OneEuro() }; };
+makeFilters();
+
+/* ---------- Поза головы ---------- */
+let pose = null;     // {x, y, span, roll} в пикселях кадра
+let alpha = 0;       // текущая непрозрачность наложения (плавное появление/исчезновение)
+let lastSeen = -1e9, lastVideoTime = -1, lastNow = 0;
+
+function updatePose(lm, W, H, tSec) {
+  const p = {};
+  for (const id of IDS) {
+    p[id] = { x: filters[id].x.filter(lm[id].x, tSec) * W, y: filters[id].y.filter(lm[id].y, tSec) * H };
+  }
+  // Расстояние между глазами: растёт, когда лицо ближе к камере, — это и есть масштаб
+  const span = Math.hypot(p[263].x - p[33].x, p[263].y - p[33].y);
+  // Крен по линии глаз и по оси «брови → макушка», усредняем через sin/cos
+  const rEyes = Math.atan2(p[263].y - p[33].y, p[263].x - p[33].x);
+  const ux = p[10].x - p[9].x, uy = p[10].y - p[9].y;
+  const rUp = Math.atan2(ux, -uy);
+  const roll = Math.atan2(Math.sin(rEyes) + Math.sin(rUp), Math.cos(rEyes) + Math.cos(rUp));
+  // Якорь чуть выше точки 10: продолжаем линию 151 → 10
+  pose = {
+    x: p[10].x + (p[10].x - p[151].x) * 0.4,
+    y: p[10].y + (p[10].y - p[151].y) * 0.4,
+    span, roll,
+  };
+}
+
+function drawOverlay() {
+  if (!pose || !overlay.el || alpha < 0.01) return;
+  const w = pose.span * 1.6 * adj.s, h = w * overlay.h / overlay.w;
+  const c = Math.cos(pose.roll), s = Math.sin(pose.roll);
+  // ручное смещение хранится в системе координат головы
+  const ox = adj.x * pose.span, oy = adj.y * pose.span;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(pose.x + ox * c - oy * s, pose.y + ox * s + oy * c);
+  ctx.rotate(pose.roll + adj.r);
+  ctx.drawImage(overlay.el, -w / 2, -h, w, h); // нижний центр картинки стоит на голове
+  ctx.restore();
+}
+
+/* ---------- Зеркало ---------- */
+// Превью всегда зеркальное у фронтальной камеры.
+// Если зеркалить файл — зеркалим содержимое холста, иначе зеркалим только отображение (CSS).
+const ctxFlip = () => state.facing === 'user' && state.fileMirror;
+const cssFlip = () => state.facing === 'user' && !state.fileMirror;
+function applyMirrorUi() {
+  view.style.transform = cssFlip() ? 'scaleX(-1)' : 'none';
+  $('mirrorBtn').style.display = state.facing === 'user' ? '' : 'none';
+  $('mirrorBtn').textContent = 'Зеркало в файле: ' + (state.fileMirror ? 'вкл' : 'выкл');
+  $('mirrorBtn').classList.toggle('on', state.fileMirror);
+}
+$('mirrorBtn').onclick = () => { state.fileMirror = !state.fileMirror; applyMirrorUi(); };
+
+/* ---------- Основной цикл отрисовки ---------- */
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!state.started || cam.readyState < 2 || !cam.videoWidth) return;
+  const W = cam.videoWidth, H = cam.videoHeight;
+  if (view.width !== W || view.height !== H) { view.width = W; view.height = H; }
+  const dt = Math.min(0.1, (now - lastNow) / 1000); lastNow = now;
+
+  // Детекция лица на новом кадре видео
+  if (landmarker && cam.currentTime !== lastVideoTime) {
+    lastVideoTime = cam.currentTime;
+    try {
+      const res = landmarker.detectForVideo(cam, now);
+      if (res.faceLandmarks && res.faceLandmarks.length) {
+        if (now - lastSeen > 400) makeFilters();   // после потери лица фильтры начинаем заново
+        lastSeen = now;
+        updatePose(res.faceLandmarks[0], W, H, now / 1000);
+      }
+    } catch (e) { /* пропускаем кадр */ }
+  }
+  const visible = now - lastSeen < 250;
+  alpha += ((visible ? 1 : 0) - alpha) * (1 - Math.exp(-dt * 8)); // плавно показываем/скрываем
+
+  ctx.save();
+  if (ctxFlip()) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(cam, 0, 0, W, H);
+  drawOverlay();
+  ctx.restore();
+}
+requestAnimationFrame(frame);
+
+/* ---------- Жесты (Pointer Events) ---------- */
+// Перевод точки касания в координаты кадра (учитывая cover и зеркало)
+function toScene(e) {
+  const r = view.getBoundingClientRect();
+  let fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
+  if (cssFlip()) fx = 1 - fx;
+  const cw = view.width || 1, ch = view.height || 1;
+  const s = Math.max(r.width / cw, r.height / ch);
+  let x = (fx * r.width - (r.width - cw * s) / 2) / s;
+  const y = (fy * r.height - (r.height - ch * s) / 2) / s;
+  if (ctxFlip()) x = cw - x;
+  return { x, y };
+}
+function applyDrag(dx, dy) {
+  const roll = pose ? pose.roll : 0, span = pose ? pose.span : (view.width || 1000) * 0.25;
+  const c = Math.cos(roll), s = Math.sin(roll);
+  adj.x += (dx * c + dy * s) / span;
+  adj.y += (-dx * s + dy * c) / span;
+}
+const angDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
+const ptrs = new Map();
+view.addEventListener('pointerdown', e => {
+  try { view.setPointerCapture(e.pointerId); } catch (_) {}
+  ptrs.set(e.pointerId, toScene(e));
+});
+view.addEventListener('pointermove', e => {
+  if (!ptrs.has(e.pointerId)) return;
+  const old = [...ptrs.values()].map(p => ({ ...p }));
+  ptrs.set(e.pointerId, toScene(e));
+  const cur = [...ptrs.values()];
+  if (cur.length === 1) {
+    applyDrag(cur[0].x - old[0].x, cur[0].y - old[0].y);
+  } else if (cur.length >= 2) {
+    const [a0, b0, a1, b1] = [old[0], old[1], cur[0], cur[1]];
+    const d0 = Math.hypot(b0.x - a0.x, b0.y - a0.y), d1 = Math.hypot(b1.x - a1.x, b1.y - a1.y);
+    if (d0 > 10) adj.s = Math.min(5, Math.max(0.2, adj.s * d1 / d0));   // pinch — размер
+    adj.r += angDiff(Math.atan2(b1.y - a1.y, b1.x - a1.x), Math.atan2(b0.y - a0.y, b0.x - a0.x)); // поворот двумя пальцами
+    applyDrag((a1.x + b1.x - a0.x - b0.x) / 2, (a1.y + b1.y - a0.y - b0.y) / 2);
+  }
+});
+const endPtr = e => ptrs.delete(e.pointerId);
+view.addEventListener('pointerup', endPtr);
+view.addEventListener('pointercancel', endPtr);
+
+/* ---------- Камера и модель ---------- */
+let statusTimer = 0;
+function say(text, ms = 0) {
+  const s = $('status');
+  clearTimeout(statusTimer);
+  if (!text) { s.style.display = 'none'; return; }
+  s.textContent = text; s.style.display = 'block';
+  if (ms) statusTimer = setTimeout(() => s.style.display = 'none', ms);
+}
+
+async function startCamera() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: state.facing }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+    audio: false,   // микрофон запрашиваем отдельно, при переходе в режим «Видео»
+  });
+  cam.srcObject = stream;
+  await cam.play();
+  makeFilters(); pose = null; alpha = 0; lastSeen = -1e9; lastVideoTime = -1;
+  applyMirrorUi();
+}
+
+async function loadModel() {
+  say('Загрузка модели лица…');
+  const { FaceLandmarker, FilesetResolver } = await import(MP_URL);
+  const fileset = await FilesetResolver.forVisionTasks(MP_WASM);
+  const make = delegate => FaceLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: MP_MODEL, delegate },
+    runningMode: 'VIDEO', numFaces: 1,
+  });
+  try { landmarker = await make('GPU'); } catch (_) { landmarker = await make('CPU'); }
+  say('');
+}
+
+async function ensureMic() {
+  if (micStream && micStream.getAudioTracks().some(t => t.readyState === 'live')) return;
+  try { micStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (_) { micStream = null; say('Нет доступа к микрофону — запись будет без звука', 3000); }
+}
+
+$('startBtn').onclick = async () => {
+  $('startBtn').disabled = true;
+  try {
+    await startCamera();
+    state.started = true;
+    $('intro').classList.remove('show');
+    await loadModel();
+  } catch (e) {
+    $('startBtn').disabled = false;
+    say('Ошибка: ' + (e.message || e.name), 5000);
+  }
+};
+$('helpBtn').onclick = () => { $('startBtn').style.display = 'none'; $('intro').classList.add('show'); };
+$('intro').addEventListener('click', e => { // на экране справки закрываем по тапу вне кнопок
+  if (state.started && e.target.closest('.how') === null) $('intro').classList.remove('show');
+});
+
+$('flipBtn').onclick = async () => {
+  if (state.recording) return;
+  state.facing = state.facing === 'user' ? 'environment' : 'user';
+  try { await startCamera(); } catch (e) { say('Не удалось переключить камеру', 3000); }
+};
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.started && stream && stream.getVideoTracks().every(t => t.readyState === 'ended')) startCamera();
+});
+
+/* ---------- Режимы и затвор ---------- */
+function setMode(m) {
+  if (state.recording) return;
+  state.mode = m;
+  document.body.classList.toggle('video', m === 'video');
+  $('modePhoto').classList.toggle('act', m === 'photo');
+  $('modeVideo').classList.toggle('act', m === 'video');
+  if (m === 'video') ensureMic();
+}
+$('modePhoto').onclick = () => setMode('photo');
+$('modeVideo').onclick = () => setMode('video');
+
+const toBlob = (type, q) => new Promise(res => view.toBlob(res, type, q));
+
+$('shutter').onclick = async () => {
+  if (!state.started) return;
+  if (state.mode === 'photo') {
+    const f = $('flash'); f.classList.add('go'); setTimeout(() => f.classList.remove('go'), 60);
+    const blob = await toBlob('image/jpeg', 0.95);   // полное разрешение кадра камеры
+    if (blob) showReview('photo', blob);
+  } else if (!state.recording) startRec();
+  else stopRec();
+};
+
+/* ---------- Запись видео ---------- */
+let rec = null, chunks = [], timerId = 0, recStart = 0;
+function pickMime() {
+  const list = [   // mp4 в приоритете (нужен iPhone), запасной вариант — webm
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4;codecs=avc1', 'video/mp4',
+    'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm',
+  ];
+  return list.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+}
+async function startRec() {
+  if (!window.MediaRecorder) { say('Запись не поддерживается в этом браузере', 3000); return; }
+  await ensureMic();
+  const out = view.captureStream(30);
+  if (micStream) micStream.getAudioTracks().forEach(t => out.addTrack(t));
+  const mime = pickMime();
+  try { rec = new MediaRecorder(out, mime ? { mimeType: mime, videoBitsPerSecond: 8e6 } : {}); }
+  catch (_) { rec = new MediaRecorder(out); }
+  chunks = [];
+  rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  rec.onstop = () => {
+    const type = (rec.mimeType || mime || 'video/webm').split(';')[0];
+    showReview('video', new Blob(chunks, { type }));
+  };
+  rec.start(1000);
+  state.recording = true; document.body.classList.add('rec');
+  recStart = Date.now();
+  $('timerText').textContent = '00:00';
+  timerId = setInterval(() => {
+    const s = Math.floor((Date.now() - recStart) / 1000);
+    $('timerText').textContent = String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+  }, 250);
+}
+function stopRec() {
+  clearInterval(timerId);
+  state.recording = false; document.body.classList.remove('rec');
+  if (rec && rec.state !== 'inactive') rec.stop();
+}
+
+/* ---------- Просмотр и сохранение ---------- */
+let pending = null;   // { blob, url, name }
+function showReview(kind, blob) {
+  const ext = blob.type.includes('mp4') ? 'mp4' : blob.type.includes('webm') ? 'webm' : (kind === 'photo' ? 'jpg' : 'mp4');
+  pending = { blob, url: URL.createObjectURL(blob), name: `swan-${Date.now()}.${ext}` };
+  const m = $('reviewMedia'); m.innerHTML = '';
+  const el = document.createElement(kind === 'photo' ? 'img' : 'video');
+  el.src = pending.url;
+  if (kind === 'video') { el.controls = true; el.playsInline = true; el.autoplay = true; el.loop = true; }
+  m.appendChild(el);
+  $('review').classList.add('show');
+}
+function closeReview() {
+  $('review').classList.remove('show'); $('reviewMedia').innerHTML = '';
+  if (pending) URL.revokeObjectURL(pending.url);
+  pending = null;
+}
+$('cancelBtn').onclick = closeReview;
+$('saveBtn').onclick = async () => {
+  if (!pending) return;
+  const { blob, name } = pending;
+  const file = new File([blob], name, { type: blob.type });
+  // 1) системное меню «Поделиться» (на iPhone там «Сохранить в Фото»)
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file] }); closeReview(); return; }
+    catch (e) { if (e.name === 'AbortError') return; /* иначе падаем на скачивание */ }
+  }
+  // 2) запасной вариант: обычное скачивание файла
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = href; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 10000);
+  closeReview();
+};
+
+/* ---------- PWA: манифест, иконки, service worker ---------- */
+(async function setupPwa() {
+  try {
+    // Иконки рисуем из того же SVG-лебедя
+    const im = new Image();
+    await new Promise((ok, no) => { im.onload = ok; im.onerror = no; im.src = svgToUrl(iconSVG()); });
+    const png = size => {
+      const c = document.createElement('canvas'); c.width = c.height = size;
+      c.getContext('2d').drawImage(im, 0, 0, size, size);
+      return c.toDataURL('image/png');
+    };
+    const i192 = png(192), i512 = png(512), i180 = png(180);
+
+    const apple = document.createElement('link');
+    apple.rel = 'apple-touch-icon'; apple.href = i180; document.head.appendChild(apple);
+
+    const base = location.origin + location.pathname.replace(/[^/]*$/, '');
+    const manifest = {
+      name: 'Лебедь-камера', short_name: 'Лебедь',
+      start_url: base, scope: base,
+      display: 'fullscreen', display_override: ['fullscreen', 'standalone'],
+      orientation: 'portrait',
+      background_color: '#1b1c1f', theme_color: '#2b2d31',
+      icons: [
+        { src: i192, sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
+        { src: i512, sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+      ],
+    };
+    const link = document.createElement('link');
+    link.rel = 'manifest';
+    link.href = 'data:application/manifest+json;base64,' + btoa(unescape(encodeURIComponent(JSON.stringify(manifest))));
+    document.head.appendChild(link);
+  } catch (_) { /* иконки не критичны */ }
+
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+})();
+
+applyMirrorUi();
+</script>
+</body>
+</html>
